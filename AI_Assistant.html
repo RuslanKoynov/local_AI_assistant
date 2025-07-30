@@ -1,0 +1,242 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Локальный AI Ассистент для студентов</title>
+    <!-- Подключаем трансформеры -->
+    <style>
+        /* CSS стили */
+        body {
+            font-family: Arial, Helvetica, sans-serif;
+            text-align: center;
+        }
+        #container {
+            width: 350px;
+            margin: 20px auto;
+            background-color: #fff;
+            border-radius: 10px;
+            box-shadow: 0 0 10px rgba(0,0,0,0.1);
+            padding: 15px;
+        }
+        h1 {
+            color: #4a6fa5;
+            font-size: 18px;
+            margin-bottom: 10px;
+        }
+        #messages {
+            height: 300px;
+            overflow-y: scroll;
+            border: 1px solid #ccc;
+            padding: 10px;
+            margin-bottom: 10px;
+        }
+        .message {
+            margin-bottom: 10px;
+            padding: 8px 12px;
+            border-radius: 18px;
+            max-width: 80%;
+        }
+        .user-message {
+            background: #e3f2fd;
+            float: right;
+            clear: both;
+        }
+        .bot-message {
+            background: #fff;
+            float: left;
+            clear: both;
+        }
+        #input-container {
+            display: flex;
+            align-items: center;
+        }
+        input[type="text"] {
+            flex-grow: 1;
+            padding: 10px;
+            border: 1px solid #ccc;
+            border-radius: 20px;
+            margin-right: 10px;
+        }
+        button {
+            background: #4a6fa5;
+            color: white;
+            border: none;
+            border-radius: 20px;
+            padding: 10px 20px;
+            cursor: pointer;
+        }
+        #file-info {
+            margin-top: 10px;
+            font-style: italic;
+            color: #666;
+        }
+        #file-button {
+            background: transparent;
+            border: none;
+            cursor: pointer;
+        }
+        #file-button::before {
+            content: "📁";
+            font-size: 18px;
+        }
+    </style>
+</head>
+<body>
+    <script type="module">
+    import { pipeline, env } from "https://cdn.jsdelivr.net/npm/@huggingface/transformers";
+    //import { pipeline, env } from "https://cdn.jsdelivr.net/npm/@xenova/transformers";
+    env.allowLocalModels = false;
+    const status = document.getElementById("status");
+    status.textContent = "Loading model...";
+    const detector = await pipeline('text-generation', 'onnx-community/N1-ONNX');
+    status.textContent = "Ready";
+    // Константы и элементы DOM
+    const messagesEl = document.getElementById('messages');
+    const userInputEl = document.getElementById('user-input');
+    const fileButtonEl = document.getElementById('file-button');
+    const sendBtnEl = document.getElementById('send-button');
+    const fileInputEl = document.getElementById('file-input');
+    const fileInfoEl = document.getElementById('file-info');
+//    const { pipeline } = transformers;
+
+    // Хранение истории чата
+    const STORAGE_KEY = 'ai_assistant_chat_history';
+    let chatHistory = [];
+
+    // Текущий загруженный файл
+    let currentFile = null;
+
+    // Функция восстановления истории чата
+    function restoreChatHistory() {
+        const storedMessages = localStorage.getItem(STORAGE_KEY);
+        if (storedMessages) {
+            chatHistory = JSON.parse(storedMessages);
+            renderChatHistory(chatHistory);
+        }
+    }
+
+    // Рендерит всю историю чата в элементе messages
+    function renderChatHistory(history) {
+        history.forEach(message => {
+            appendMessage(message.sender, message.text);
+        });
+    }
+
+
+    // Отправляет сообщение пользователя и получает ответ
+    async function sendMessage() {
+        const userMsg = userInputEl.value.trim();
+        if (!userMsg && !currentFile) return;
+
+        // Сначала добавляем отправленное пользователем сообщение
+        appendMessage('user', userMsg);
+        chatHistory.push({ sender: 'user', text: userMsg });
+
+        // Получаем содержимое файла, если файл был отправлен
+        let fileContent = '';
+        if (currentFile) {
+            fileContent = await readFileAsText(currentFile);
+            appendMessage('user', `[Файл]: ${currentFile.name}\n${fileContent}`);
+            chatHistory.push({ sender: 'user', text: `[Файл]: ${currentFile.name}\n${fileContent}` });
+        }
+
+        // Генерируем ответ помощника
+        try {
+            const fullPrompt = `${userMsg}${fileContent ? '\n' + fileContent : ''}`;
+            const generatedResponse = await generateResponse(fullPrompt);
+            appendMessage('bot', generatedResponse);
+            chatHistory.push({ sender: 'bot', text: generatedResponse });
+
+            // Сохраняем новую историю чата
+            saveChatHistory();
+        } catch (err) {
+            console.error(err);
+            appendMessage('bot', 'Что-то пошло не так. Попробуем позже...');
+        }
+
+        // Очищаем входное поле и текущий файл
+        userInputEl.value = '';
+        clearCurrentFile();
+    }
+
+    // Генерирует ответ от AI модели
+    async function generateResponse(input) {
+        const response = await detector(input, {max_new_tokens: 500, temperature: 0.7});
+        return response[0].generated_text;
+    }
+
+    // Читает файл как текст
+    function readFileAsText(file) {
+        return new Promise((resolve, reject) => {
+            const reader = new FileReader();
+            reader.onload = event => resolve(event.target.result);
+            reader.onerror = error => reject(error);
+            reader.readAsText(file);
+        });
+    }
+
+    // Открывает диалог выбора файла
+    function openFileDialog() {
+        fileInputEl.click();
+    }
+
+    // Обрабатывает событие изменения файла
+    function handleFileUpload(event) {
+        const file = event.target.files[0];
+        console.log(file);
+        if (file) {
+            currentFile = file;
+            fileInfoEl.textContent = `Выбран файл: ${file.name}`;
+        }
+    }
+
+    // Удаляет текущий файл
+    function clearCurrentFile() {
+        currentFile = null;
+        fileInfoEl.textContent = '';
+    }
+
+    // Добавляет новое сообщение в UI
+    function appendMessage(sender, text) {
+        const div = document.createElement('div');
+        div.classList.add('message', sender === 'user' ? 'user-message' : 'bot-message');
+        div.textContent = text;
+        messagesEl.appendChild(div);
+        messagesEl.scrollTop = messagesEl.scrollHeight;
+    }
+
+    // Сохраняет историю чата в Local Storage
+    function saveChatHistory() {
+        localStorage.setItem(STORAGE_KEY, JSON.stringify(chatHistory));
+    }
+
+    sendBtnEl.addEventListener('click', sendMessage);
+        userInputEl.addEventListener('keypress', (e) => {
+            if (e.key === 'Enter') sendMessage();
+        });
+
+    fileButtonEl.addEventListener('click', () => {
+        fileInputEl.click();
+    });
+
+    fileInputEl.addEventListener('change', handleFileUpload);
+
+    restoreChatHistory();
+
+</script>
+<div id="container">
+    <p id="status"></p>
+    <h1>AI Ассистент</h1>
+    <div id="messages"></div>
+    <div id="input-container">
+        <input type="text" id="user-input" placeholder="Ваш вопрос или код..." />
+        <button id="send-button">Отправить</button>
+    </div>
+    <div id="file-info"></div>
+    <input type="file" id="file-input" accept=".js,.py,.java,.c,.cpp,.cs,.php,.html,.css,.txt" style="display:none;"/>
+    <button id="file-button"></button>
+</div>
+
+</body>
+</html>
